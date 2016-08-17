@@ -17,9 +17,11 @@ module Hakyll.Core.Compiler.Internal
     , compilerTell
     , compilerAsk
     , compilerThrow
+    , compilerFailMessage
     , compilerCatch
     , compilerResult
     , compilerUnsafeIO
+    , compilerDebugLog
 
       -- * Utilities
     , compilerTellDependencies
@@ -31,7 +33,7 @@ module Hakyll.Core.Compiler.Internal
 import           Control.Applicative            (Alternative (..))
 import           Control.Exception              (SomeException, handle)
 import           Control.Monad                  (forM_)
-import           Control.Monad.Except            (MonadError (..))
+import           Control.Monad.Except           (MonadError (..))
 import           Data.Set                       (Set)
 import qualified Data.Set                       as S
 
@@ -41,7 +43,7 @@ import           Hakyll.Core.Configuration
 import           Hakyll.Core.Dependencies
 import           Hakyll.Core.Identifier
 import           Hakyll.Core.Identifier.Pattern
-import           Hakyll.Core.Logger             (Logger)
+import           Hakyll.Core.Logger             (Logger, Verbosity)
 import qualified Hakyll.Core.Logger             as Logger
 import           Hakyll.Core.Metadata
 import           Hakyll.Core.Provider
@@ -93,7 +95,7 @@ instance Monoid CompilerWrite where
 data CompilerResult a where
     CompilerDone     :: a -> CompilerWrite -> CompilerResult a
     CompilerSnapshot :: Snapshot -> Compiler a -> CompilerResult a
-    CompilerError    :: [String] -> CompilerResult a
+    CompilerError    :: Verbosity -> [String] -> CompilerResult a
     CompilerRequire  :: (Identifier, Snapshot) -> Compiler a -> CompilerResult a
 
 
@@ -112,7 +114,7 @@ instance Functor Compiler where
         return $ case res of
             CompilerDone x w      -> CompilerDone (f x) w
             CompilerSnapshot s c' -> CompilerSnapshot s (fmap f c')
-            CompilerError e       -> CompilerError e
+            CompilerError v e     -> CompilerError v e
             CompilerRequire i c'  -> CompilerRequire i (fmap f c')
     {-# INLINE fmap #-}
 
@@ -132,13 +134,13 @@ instance Monad Compiler where
                     CompilerSnapshot s c' -> CompilerSnapshot s $ do
                         compilerTell w  -- Save dependencies!
                         c'
-                    CompilerError e       -> CompilerError e
+                    CompilerError v e     -> CompilerError v e
                     CompilerRequire i c'  -> CompilerRequire i $ do
                         compilerTell w  -- Save dependencies!
                         c'
 
             CompilerSnapshot s c' -> return $ CompilerSnapshot s (c' >>= f)
-            CompilerError e       -> return $ CompilerError e
+            CompilerError v e     -> return $ CompilerError v e
             CompilerRequire i c'  -> return $ CompilerRequire i (c' >>= f)
     {-# INLINE (>>=) #-}
 
@@ -164,7 +166,10 @@ instance MonadMetadata Compiler where
 --------------------------------------------------------------------------------
 instance MonadError [String] Compiler where
   throwError = compilerThrow
-  catchError = compilerCatch
+  catchError = (. matchErr) . compilerCatch
+    where
+      matchErr f Logger.Error es = f es
+      matchErr f _            _  = f []
 
 
 --------------------------------------------------------------------------------
@@ -172,17 +177,20 @@ runCompiler :: Compiler a -> CompilerRead -> IO (CompilerResult a)
 runCompiler compiler read' = handle handler $ unCompiler compiler read'
   where
     handler :: SomeException -> IO (CompilerResult a)
-    handler e = return $ CompilerError [show e]
+    handler e = return $ CompilerError Logger.Error [show e]
 
 
 --------------------------------------------------------------------------------
 instance Alternative Compiler where
-    empty   = compilerThrow []
-    x <|> y = compilerCatch x $ \es -> do
-        logger <- compilerLogger <$> compilerAsk
-        forM_ es $ \e -> compilerUnsafeIO $ Logger.debug logger $
-            "Hakyll.Core.Compiler.Internal: Alternative failed: " ++ e
-        y
+    empty   = compilerError Logger.Debug []
+    x <|> y = compilerCatch x $ \vx exs -> compilerCatch y $ \vy eys ->
+        case vx `compare` vy of
+            LT -> log eys >> compilerError vx exs
+            EQ ->            compilerError vx (exs ++ eys)
+            GT -> log exs >> compilerError vy eys
+      where
+        log = compilerDebugLog . map
+            ("Hakyll.Core.Compiler.Internal: Alternative fail suppressed: " ++)
     {-# INLINE (<|>) #-}
 
 
@@ -199,19 +207,25 @@ compilerTell deps = Compiler $ \_ -> return $ CompilerDone () deps
 
 
 --------------------------------------------------------------------------------
+compilerError :: Verbosity -> [String] -> Compiler a
+compilerError v es = Compiler $ \_ -> return $ CompilerError v es
+{-# INLINE compilerError #-}
+
 compilerThrow :: [String] -> Compiler a
-compilerThrow es = Compiler $ \_ -> return $ CompilerError es
-{-# INLINE compilerThrow #-}
+compilerThrow = compilerError Logger.Error
+
+compilerFailMessage :: String -> Compiler a
+compilerFailMessage = compilerError Logger.Message . return
 
 
 --------------------------------------------------------------------------------
-compilerCatch :: Compiler a -> ([String] -> Compiler a) -> Compiler a
+compilerCatch :: Compiler a -> (Verbosity -> [String] -> Compiler a) -> Compiler a
 compilerCatch (Compiler x) f = Compiler $ \r -> do
     res <- x r
     case res of
         CompilerDone res' w  -> return (CompilerDone res' w)
         CompilerSnapshot s c -> return (CompilerSnapshot s (compilerCatch c f))
-        CompilerError e      -> unCompiler (f e) r
+        CompilerError v e    -> unCompiler (f v e) r
         CompilerRequire i c  -> return (CompilerRequire i (compilerCatch c f))
 {-# INLINE compilerCatch #-}
 
@@ -230,13 +244,17 @@ compilerUnsafeIO io = Compiler $ \_ -> do
     return $ CompilerDone x mempty
 {-# INLINE compilerUnsafeIO #-}
 
+--------------------------------------------------------------------------------
+compilerDebugLog :: [String] -> Compiler ()
+compilerDebugLog ms = do
+  logger <- compilerLogger <$> compilerAsk
+  compilerUnsafeIO $ forM_ ms $ Logger.debug logger
 
 --------------------------------------------------------------------------------
 compilerTellDependencies :: [Dependency] -> Compiler ()
 compilerTellDependencies ds = do
-  logger <- compilerLogger <$> compilerAsk
-  forM_ ds $ \d -> compilerUnsafeIO $ Logger.debug logger $
-      "Hakyll.Core.Compiler.Internal: Adding dependency: " ++ show d
+  compilerDebugLog $ map (\d ->
+      "Hakyll.Core.Compiler.Internal: Adding dependency: " ++ show d) ds
   compilerTell mempty {compilerDependencies = ds}
 {-# INLINE compilerTellDependencies #-}
 
