@@ -194,7 +194,7 @@ unsafeCompiler = compilerUnsafeIO
 -- "Hakyll.Web.Template" macro, and alternative
 -- 'Hakyll.Web.Template.Context.Context's are tried
 -- 
--- @since 4.12.0
+-- @since 4.13.0
 failBranch :: String -> Compiler a
 failBranch = compilerFailBranch . return
 
@@ -204,7 +204,7 @@ failBranch = compilerFailBranch . return
 -- Unlike @'`Control.Monad.Except.catchError`' ('Control.Monad.Except.throwError' . f)@,
 -- it keeps the distinction between 'fail' and 'failBranch'.
 -- 
--- @since 4.12.0
+-- @since 4.13.0
 mapError :: ([String] -> [String]) -> Compiler a -> Compiler a
 mapError f = compilerTry >=> either (compilerResult . CompilerError . fmap f) return
 
