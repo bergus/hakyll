@@ -23,6 +23,7 @@ module Hakyll.Web.Template.Internal
 
 
 --------------------------------------------------------------------------------
+import           Data.Monoid                          ((<>))
 import           Data.Binary                          (Binary)
 import           Data.List                            (intercalate)
 import           Data.Typeable                        (Typeable)
@@ -170,6 +171,10 @@ applyTemplate' tes name context x = go tes `catchError` handler
         ListField c xs -> do
             sep <- maybe (return "") go s
             bs  <- mapM (applyTemplate' b name c) xs
+            return $ intercalate sep bs
+        LexicalListField mc vs -> do
+            sep <- maybe (return "") go s
+            bs  <- mapM (\v -> applyTemplate' b name (mc context v) x) vs
             return $ intercalate sep bs
 
     applyElem (Partial e) = do
