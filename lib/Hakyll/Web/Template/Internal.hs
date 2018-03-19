@@ -114,29 +114,30 @@ applyTemplate :: Template                -- ^ Template
               -> Item a                  -- ^ Page
               -> Compiler (Item String)  -- ^ Resulting item
 applyTemplate tpl context item = do
-    body <- applyTemplate' (unTemplate tpl) (getOrigin tpl) context item
+    body <- applyTemplate' (unTemplate tpl) context item `catchError` handler
     return $ itemSetBody body item
+  where
+    tplName = getOrigin tpl
+    itemName = show $ itemIdentifier item
+    handler es = fail $ "Hakyll.Web.Template.applyTemplate: Failed to " ++
+        (if tplName == itemName
+          then "interpolate template in item " ++ itemName
+          else "apply template " ++ tplName ++ " to item " ++ itemName) ++
+        ":\n" ++ intercalate ",\n" es
+
 
 
 --------------------------------------------------------------------------------
 applyTemplate'
     :: forall a.
        [TemplateElement] -- ^ Unwrapped Template
-    -> FilePath          -- ^ template name
     -> Context a         -- ^ Context
     -> Item a            -- ^ Page
     -> Compiler String   -- ^ Resulting item
-applyTemplate' tes name context x = go tes `catchError` handler
+applyTemplate' tes context x = go tes
   where
     context' :: String -> [String] -> Item a -> Compiler ContextField
-    context' = unContext (context `mappend` missingField)
-
-    itemName = show $ itemIdentifier x
-    handler es = fail $ "Hakyll.Web.Template.applyTemplate: Failed to " ++
-        (if name == itemName
-          then "interpolate template in item " ++ name
-          else "apply template " ++ name ++ " to item " ++ itemName) ++
-        ":\n" ++ intercalate ",\n" es
+    context' = unContext (context <> missingField)
 
     go = fmap concat . mapM applyElem
 
@@ -168,19 +169,19 @@ applyTemplate' tes name context x = go tes `catchError` handler
     applyElem (For e b s) = applyExpr e >>= \cf -> case cf of
         EmptyField     -> expected "ListField" "boolField" e
         StringField _  -> expected "ListField" "StringField" e
-        ListField c xs -> do
+        ListField c xs -> mapError ("In for loop context":) $ do
             sep <- maybe (return "") go s
-            bs  <- mapM (applyTemplate' b name c) xs
+            bs  <- mapM (applyTemplate' b c) xs
             return $ intercalate sep bs
-        LexicalListField mc vs -> do
+        LexicalListField mc vs -> mapError ("In for loop":) $ do
             sep <- maybe (return "") go s
-            bs  <- mapM (\v -> applyTemplate' b name (mc context v) x) vs
+            bs  <- mapM (\v -> applyTemplate' b (mc context v) x) vs
             return $ intercalate sep bs
 
-    applyElem (Partial e) = do
+    applyElem (Partial e) = mapError ("In partial":) $ do
         p    <- applyExpr e >>= getString e
         tpl' <- loadBody (fromFilePath p)
-        applyTemplate' (unTemplate tpl') (getOrigin tpl') context x
+        itemBody <$> applyTemplate tpl' context x
 
     ---------------------------------------------------------------------------
 

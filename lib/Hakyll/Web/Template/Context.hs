@@ -249,7 +249,7 @@ mapContext f (Context c) = Context $ \k a i -> do
     case fld of
         EmptyField      -> wrongType "boolField"
         StringField str -> return $ StringField (f str)
-        ListField _ _   -> wrongType "ListField"
+        _               -> wrongType "ListField"
   where
     wrongType typ = fail $ "Hakyll.Web.Template.Context.mapContext: " ++
         "can't map over a " ++ typ ++ "!"
@@ -308,10 +308,10 @@ lookupNestedValue []     v          = return $ let Just s = toString v in String
 lookupNestedValue (k:ks) (Object m) = case H.lookup (T.pack k) m of
     Nothing -> failBranch $ "No '"++k++"' property in object" -- ++ debug m
     Just v  -> lookupNestedValue ks v
-lookupNestedValue (k:ks) (Array v)  = case readMaybe k :: Maybe Int of
+lookupNestedValue (k:ks) (Array a)  = case readMaybe k :: Maybe Int of
     Nothing -> failBranch $ "No '"++k++"' element in array" -- ++ debug v
-    Just n  -> case v V.!? n of
-        Nothing -> failBranch $ "No '"++k++"' index in array of size " ++ show (length v) -- ++ debug v
+    Just n  -> case a V.!? n of
+        Nothing -> failBranch $ "No '"++k++"' index in array of size " ++ show (length a) -- ++ debug a
         Just v  -> lookupNestedValue ks v
 lookupNestedValue (k:_)  _          = failBranch $ "no '"++k++"' in primitive value" -- ++ debug p
 
