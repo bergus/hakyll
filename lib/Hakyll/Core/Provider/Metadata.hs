@@ -27,12 +27,13 @@ import           Hakyll.Core.Identifier
 import           Hakyll.Core.Metadata
 import           Hakyll.Core.Provider.Internal
 import           System.IO                     as IO
+import           System.IO.Error               (catchIOError)
 
 
 --------------------------------------------------------------------------------
 loadMetadata :: Provider -> Identifier -> IO (Metadata, Maybe String)
 loadMetadata p identifier = do
-    hasHeader  <- probablyHasMetadataHeader fp
+    hasHeader  <- probablyHasMetadataHeader fp `catchIOError` \_ -> return False
     (md, body) <- if hasHeader
         then second Just <$> loadMetadataHeader fp
         else return (mempty, Nothing)
